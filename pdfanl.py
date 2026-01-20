@@ -20,10 +20,8 @@ import sys
 import re
 import os
 import hashlib
-import time
 from pathlib import Path
-from typing import Dict, List, Any, Optional
-import base64
+from typing import Dict, List, Any
 
 try:
     import requests
