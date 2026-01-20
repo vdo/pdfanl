@@ -6,6 +6,8 @@ This tool analyzes PDF files and extracts:
 - PDF version and basic metadata
 - Links and annotations
 - JavaScript code
+- Form fields
+- Virustotal analysis
 - Resources (images, fonts, etc.)
 - Security information
 - Page statistics
