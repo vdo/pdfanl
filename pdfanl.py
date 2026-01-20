@@ -20,6 +20,7 @@ import sys
 import re
 import os
 import hashlib
+import zlib
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -340,6 +341,9 @@ class PDFAnalyzer:
             '/XFA': 0,
             '/Encrypt': 0,
             '/ObjStm': 0,
+            '/GoToE': 0,
+            '/GoToR': 0,
+            '/SubmitForm': 0,
             'obj': 0,
             'endobj': 0,
             'stream': 0,
@@ -361,6 +365,32 @@ class PDFAnalyzer:
         
         self.analysis_results['suspicious_keywords'] = suspicious_keywords
     
+    def _decode_stream(self, data: bytes) -> str:
+        """Decode stream data with common filters."""
+        if not data:
+            return ""
+        
+        try:
+            # Try FlateDecode (zlib compression)
+            try:
+                decoded = zlib.decompress(data)
+                return decoded.decode('utf-8', errors='ignore')
+            except:
+                pass
+            
+            # Try as hex string
+            try:
+                if all(c in b'0123456789abcdefABCDEF \t\n\r' for c in data[:100]):
+                    decoded = bytes.fromhex(data.decode('ascii').replace(' ', '').replace('\n', '').replace('\r', '').replace('\t', ''))
+                    return decoded.decode('utf-8', errors='ignore')
+            except:
+                pass
+            
+            # Return as-is if it's already text
+            return data.decode('utf-8', errors='ignore')
+        except:
+            return str(data)
+    
     def _analyze_javascript(self):
         """Extract JavaScript code from the PDF."""
         javascript_code = []
@@ -370,7 +400,13 @@ class PDFAnalyzer:
             if hasattr(self.doc, 'get_js_scripts'):
                 doc_scripts = self.doc.get_js_scripts()
                 if doc_scripts:
-                    javascript_code.extend(doc_scripts)
+                    for script in doc_scripts:
+                        code = self._decode_stream(script.encode() if isinstance(script, str) else script)
+                        javascript_code.append({
+                            'page': 0,
+                            'type': 'document_script',
+                            'code': code[:500]  # Limit to 500 chars for display
+                        })
         except Exception as e:
             print(f"Error extracting document-level JavaScript: {e}")
         
@@ -384,10 +420,11 @@ class PDFAnalyzer:
                     page_scripts = page.get_js_scripts()
                     if page_scripts:
                         for script in page_scripts:
+                            code = self._decode_stream(script.encode() if isinstance(script, str) else script)
                             javascript_code.append({
                                 'page': page_num + 1,
                                 'type': 'page_script',
-                                'code': script
+                                'code': code[:500]  # Limit to 500 chars for display
                             })
                 except Exception as e:
                     print(f"Error extracting page {page_num + 1} JavaScript: {e}")
@@ -405,11 +442,12 @@ class PDFAnalyzer:
                                 annot_type = ANNOT_TYPE_NAMES.get(annot.type, f'Unknown({annot.type})')
                             
                             for script in annot_scripts:
+                                code = self._decode_stream(script.encode() if isinstance(script, str) else script)
                                 javascript_code.append({
                                     'page': page_num + 1,
                                     'type': 'annotation_script',
                                     'annotation_type': annot_type,
-                                    'code': script
+                                    'code': code[:500]  # Limit to 500 chars for display
                                 })
                     except Exception as e:
                         print(f"Error extracting annotation JavaScript: {e}")
@@ -691,6 +729,18 @@ class PDFAnalyzer:
                 'score': 25
             })
         
+        # CVE-2023-26369: One-click PDF exploits via GoToE/GoToR/SubmitForm
+        has_goto = keywords.get('/GoToE', 0) > 0 or keywords.get('/GoToR', 0) > 0
+        has_submitform = keywords.get('/SubmitForm', 0) > 0
+        if has_goto or has_submitform:
+            risk_score += 30
+            risk_factors.append({
+                'factor': 'Remote action (CVE-2023-26369)',
+                'severity': 'high',
+                'description': f"Contains remote actions (GoToE/GoToR/SubmitForm) - potential one-click exploit vulnerability",
+                'score': 30
+            })
+        
         if has_richmedia:
             risk_score += 20
             risk_factors.append({
@@ -860,10 +910,15 @@ class PDFAnalyzer:
         
         # JavaScript
         print(f"\n⚡ JavaScript: {len(results['javascript'])} scripts found")
-        for i, js in enumerate(results['javascript'][:3]):  # Show first 3
-            print(f"   {i+1}. {js.get('type', 'unknown')} on page {js.get('page', 'N/A')}")
-        if len(results['javascript']) > 3:
-            print(f"   ... and {len(results['javascript']) - 3} more")
+        if results['javascript']:
+            for i, js in enumerate(results['javascript'][:3]):  # Show first 3
+                page_info = f"page {js.get('page', 'N/A')}" if js.get('page', 0) > 0 else "document-level"
+                print(f"   {i+1}. {js.get('type', 'unknown')} on {page_info}")
+                if js.get('code'):
+                    code_preview = js['code'][:100].replace('\n', ' ').replace('\r', '')
+                    print(f"      Code: {code_preview}...")
+            if len(results['javascript']) > 3:
+                print(f"   ... and {len(results['javascript']) - 3} more")
         
         # Resources
         print(f"\n🎨 Resources:")
@@ -897,7 +952,7 @@ class PDFAnalyzer:
         keywords = results['suspicious_keywords']
         suspicious_found = False
         for key in ['/JS', '/JavaScript', '/AA', '/OpenAction', '/Launch', '/EmbeddedFile', 
-                    '/JBIG2Decode', '/RichMedia', '/XFA', '/AcroForm']:
+                    '/JBIG2Decode', '/RichMedia', '/XFA', '/AcroForm', '/GoToE', '/GoToR', '/SubmitForm']:
             if keywords.get(key, 0) > 0:
                 suspicious_found = True
                 print(f"   {key}: {keywords[key]}")
