@@ -451,6 +451,34 @@ class PDFAnalyzer:
                                 })
                     except Exception as e:
                         print(f"Error extracting annotation JavaScript: {e}")
+            
+            # Check form field widgets for JavaScript actions
+            widgets = page.widgets()
+            for widget in widgets:
+                try:
+                    # Try to get JavaScript from widget actions
+                    if hasattr(widget, 'script') and widget.script:
+                        code = self._decode_stream(widget.script.encode() if isinstance(widget.script, str) else widget.script)
+                        javascript_code.append({
+                            'page': page_num + 1,
+                            'type': 'widget_script',
+                            'field_name': widget.field_name or 'unnamed',
+                            'code': code[:500]
+                        })
+                    # Also check script_format, script_calculate, etc.
+                    for script_attr in ['script_format', 'script_calculate', 'script_change', 'script_stroke']:
+                        if hasattr(widget, script_attr):
+                            script = getattr(widget, script_attr, None)
+                            if script:
+                                code = self._decode_stream(script.encode() if isinstance(script, str) else script)
+                                javascript_code.append({
+                                    'page': page_num + 1,
+                                    'type': f'widget_{script_attr}',
+                                    'field_name': widget.field_name or 'unnamed',
+                                    'code': code[:500]
+                                })
+                except Exception as e:
+                    pass  # Silently continue if widget doesn't have script attributes
         
         self.analysis_results['javascript'] = javascript_code
     
@@ -530,8 +558,8 @@ class PDFAnalyzer:
                     'value': widget.field_value,
                     'rect': list(widget.rect),
                     'flags': widget.field_flags,
-                    'readonly': widget.readonly,
-                    'required': widget.required
+                    'readonly': getattr(widget, 'readonly', None),
+                    'required': getattr(widget, 'required', None)
                 }
                 form_fields.append(field_info)
         
@@ -914,16 +942,32 @@ class PDFAnalyzer:
                     print(f"      {i}. Page {page}: {uri}")
         
         # JavaScript
+        standalone_scripts = [js for js in results['javascript'] if 'widget' not in js.get('type', '')]
+        widget_scripts = [js for js in results['javascript'] if 'widget' in js.get('type', '')]
+        
         print(f"\n⚡ JavaScript: {len(results['javascript'])} scripts found")
-        if results['javascript']:
-            for i, js in enumerate(results['javascript'][:3]):  # Show first 3
+        if standalone_scripts:
+            print(f"   Standalone: {len(standalone_scripts)}")
+            for i, js in enumerate(standalone_scripts[:2]):  # Show first 2
                 page_info = f"page {js.get('page', 'N/A')}" if js.get('page', 0) > 0 else "document-level"
-                print(f"   {i+1}. {js.get('type', 'unknown')} on {page_info}")
+                print(f"      {i+1}. {js.get('type', 'unknown')} on {page_info}")
                 if js.get('code'):
-                    code_preview = js['code'][:100].replace('\n', ' ').replace('\r', '')
-                    print(f"      Code: {code_preview}...")
-            if len(results['javascript']) > 3:
-                print(f"   ... and {len(results['javascript']) - 3} more")
+                    code_preview = js['code'][:80].replace('\n', ' ').replace('\r', '')
+                    print(f"         Code: {code_preview}...")
+            if len(standalone_scripts) > 2:
+                print(f"      ... and {len(standalone_scripts) - 2} more")
+        
+        if widget_scripts:
+            print(f"   Widget actions: {len(widget_scripts)}")
+            for i, js in enumerate(widget_scripts[:2]):  # Show first 2
+                field_name = js.get('field_name', 'unnamed')
+                script_type = js.get('type', 'unknown').replace('widget_', '')
+                print(f"      {i+1}. Field '{field_name}' ({script_type})")
+                if js.get('code'):
+                    code_preview = js['code'][:80].replace('\n', ' ').replace('\r', '')
+                    print(f"         Code: {code_preview}...")
+            if len(widget_scripts) > 2:
+                print(f"      ... and {len(widget_scripts) - 2} more")
         
         # Resources
         print(f"\n🎨 Resources:")
