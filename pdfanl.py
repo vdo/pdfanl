@@ -860,6 +860,11 @@ class PDFAnalyzer:
         if any(f['factor'] == 'Embedded files' for f in risk_factors):
             recommendations.append('Examine embedded files separately')
         
+        # Check if PDF has external links
+        external_links = [link for link in self.analysis_results['links'] if link.get('uri')]
+        if len(external_links) > 0:
+            recommendations.append('Verify all external links before clicking')
+
         if risk_level == 'SAFE':
             recommendations.append('✓ No obvious malicious indicators detected')
         
@@ -952,7 +957,7 @@ class PDFAnalyzer:
         keywords = results['suspicious_keywords']
         suspicious_found = False
         for key in ['/JS', '/JavaScript', '/AA', '/OpenAction', '/Launch', '/EmbeddedFile', 
-                    '/JBIG2Decode', '/RichMedia', '/XFA', '/AcroForm', '/GoToE', '/GoToR', '/SubmitForm']:
+                    '/JBIG2Decode', '/RichMedia', '/XFA', '/AcroForm', '/ObjStm', '/GoToE', '/GoToR', '/SubmitForm']:
             if keywords.get(key, 0) > 0:
                 suspicious_found = True
                 print(f"   {key}: {keywords[key]}")
